@@ -43,6 +43,10 @@
         .product-item:last-child {
             border-bottom: none;
         }
+        .error-message {
+            color: red;
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
@@ -54,13 +58,14 @@
             <button onclick="findProduct()">Lookup</button>
         </div>
         <div id="results"></div>
+        <div id="error-display" class="error-message"></div>
     </div>
 
     <script>
         async function getProductData() {
             const spreadsheetId = "1gx7m98SYv1r1bvZsDKnmFyxAF3WHgswPTNcM5bJfLrc";
             const range = "Sheet1"; // Assuming your data is on Sheet1
-            const apiKey = null; // Replace with your Google Sheets API key if needed for large requests
+            const apiKey = null; // Replace with your Google Sheets API key if needed
 
             let url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?valueRenderOption=FORMATTED_VALUE&majorDimension=ROWS`;
             if (apiKey) {
@@ -69,29 +74,52 @@
 
             try {
                 const response = await fetch(url);
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(`Failed to fetch data: ${response.status} - ${errorData.error.message}`);
+                }
                 const data = await response.json();
-                const header = data.values[0].map(h => h.toLowerCase().replace(/ /g, '')); // Normalize header names
+                if (!data.values || data.values.length < 2) {
+                    throw new Error("No product data found in the Google Sheet.");
+                }
+
+                const header = data.values[0].map(h => h.toLowerCase().replace(/ /g, ''));
+                const productCodeIndex = header.indexOf('productcode');
+                const productNameIndex = header.indexOf('productname');
+                const sellingPriceIndex = header.indexOf('sellingprice');
+                const discountIndex = header.indexOf('discount');
+
+                if (productCodeIndex === -1 || productNameIndex === -1 || sellingPriceIndex === -1) {
+                    throw new Error("Missing required columns in the Google Sheet (Product Code, Product Name, Selling Price).");
+                }
+
                 const productsRaw = data.values.slice(1);
                 return productsRaw.map(row => {
                     const product = {};
-                    header.forEach((key, index) => {
-                        product[key] = row[index];
-                    });
-                    product.sellingprice = parseFloat(product.sellingprice);
-                    product.discount = parseFloat(product.discount || 0);
+                    product.productcode = row[productCodeIndex];
+                    product.productname = row[productNameIndex];
+                    product.sellingprice = parseFloat(row[sellingPriceIndex]);
+                    product.discount = parseFloat(row[discountIndex] || 0);
                     return product;
-                }).filter(p => p.productcode && p.productname && !isNaN(p.sellingprice)); // Basic data validation
+                }).filter(p => p.productcode && p.productname && !isNaN(p.sellingprice));
+
             } catch (error) {
                 console.error("Error fetching data:", error);
-                document.getElementById("results").innerHTML = "<p>Error loading product data.</p>";
+                document.getElementById("error-display").textContent = error.message;
+                document.getElementById("results").innerHTML = "";
                 return [];
             }
         }
 
         let allProducts = [];
+        let dataLoaded = false;
 
         getProductData().then(products => {
             allProducts = products;
+            dataLoaded = true;
+            if (products.length === 0 && !document.getElementById("error-display").textContent) {
+                document.getElementById("error-display").textContent = "No valid product data found in the sheet.";
+            }
         });
 
         function findProduct() {
@@ -99,8 +127,13 @@
             const resultsDiv = document.getElementById("results");
             resultsDiv.innerHTML = ""; // Clear previous results
 
+            if (!dataLoaded) {
+                resultsDiv.innerHTML = "<p>Product data is loading...</p>";
+                return;
+            }
+
             if (!allProducts || allProducts.length === 0) {
-                resultsDiv.innerHTML = "<p>Product data is loading or unavailable.</p>";
+                resultsDiv.innerHTML = "<p>No product data available.</p>";
                 return;
             }
 
@@ -137,7 +170,7 @@
             details.classList.add("product-item");
             details.innerHTML = `
                 <h3>${product.productname} (${product.productcode})</h3>
-                <p>Selling Price: $${product.sellingprice.toFixed(2)}</p>
+                <p>Selling Price: $${product.sellingprice ? product.sellingprice.toFixed(2) : 'N/A'}</p>
                 ${product.discount > 0 ? `<p>Discount: ${discountPercentage.toFixed(0)}%</p><p>Actual Selling Price: $${actualPrice.toFixed(2)}</p>` : '<p>No discount available.</p>'}
             `;
             resultsDiv.appendChild(details);
